@@ -22,6 +22,7 @@
 #include "base/thread_checker.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -226,6 +227,8 @@ public:
   /// Returns whether the order changed; the caller rebuilds. No-op while following, in Ruler mode, or without
   /// both endpoints.
   bool OptimizeRoutePoints();
+  /// Replaces a complete itinerary. Array order defines start, intermediate indexes, and finish.
+  void ReplaceRoutePoints(std::vector<RouteMarkData> points);
   bool ContinueRouteToPoint(RouteMarkData && markData);
   std::vector<RouteMarkData> GetRoutePoints() const;
   size_t GetRoutePointsCount() const;
@@ -280,9 +283,10 @@ public:
 
   /// \returns true if there are route points saved in file and false otherwise.
   bool HasSavedRoutePoints() const;
-  /// \brief It loads road points from file and delete file after loading.
-  /// The result of the loading will be sent via SafeCallback.
-  using LoadRouteHandler = platform::SafeCallback<void(bool success)>;
+  /// Applies saved points only if no itinerary was edited or cancelled while reading.
+  /// Removes the saved file after the read attempt, even if the points are not applied.
+  /// Completion runs on the GUI thread together with applying the points.
+  using LoadRouteHandler = std::function<void(bool success)>;
   void LoadRoutePoints(LoadRouteHandler const & handler);
   /// \brief It saves route points to file.
   void SaveRoutePoints();
@@ -390,6 +394,8 @@ private:
     std::vector<RouteMarkData> m_routeMarks;
   };
   std::map<uint32_t, RoutePointsTransaction> m_routePointsTransactions;
+  // Explicit itinerary changes invalidate pending reads, even if the layout becomes empty again.
+  uint64_t m_routePointsRevision = 0;
   std::chrono::steady_clock::time_point m_loadRoutePointsTimestamp;
   std::map<std::string, m2::PointF> m_transitSymbolSizes;
 

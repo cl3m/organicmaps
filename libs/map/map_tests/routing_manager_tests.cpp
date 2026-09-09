@@ -12,6 +12,7 @@
 #include "platform/gui_thread.hpp"
 #include "platform/platform.hpp"
 #include "platform/platform_tests_support/scoped_dir.hpp"
+#include "platform/settings.hpp"
 
 #include "geometry/mercator.hpp"
 
@@ -20,8 +21,11 @@
 #include "base/thread_safe_queue.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <future>
 #include <memory>
+#include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -47,6 +51,21 @@ public:
     task();
   }
 
+  bool TryRunNext()
+  {
+    Task task;
+    if (!m_tasks.TryPop(task))
+      return false;
+    task();
+    return true;
+  }
+
+  void Drain()
+  {
+    while (TryRunNext())
+    {}
+  }
+
 private:
   threads::ThreadSafeQueue<Task> m_tasks;
 };
@@ -63,14 +82,10 @@ bool LoadRoutePoints(RoutingManager & routingManager, TestGuiThread & guiThread)
 {
   bool loaded = false;
   bool completed = false;
-  // Failures may call back from the file thread, so always finish on the test GUI thread.
   routingManager.LoadRoutePoints([&](bool success)
   {
-    GetPlatform().RunTask(Platform::Thread::Gui, [&, success]
-    {
-      loaded = success;
-      completed = true;
-    });
+    loaded = success;
+    completed = true;
   });
   while (!completed)
     guiThread.RunNext();
@@ -174,7 +189,7 @@ void TestSavedRouteOrder(bool myPositionStart, size_t passedStops, bool hasCurre
     if (restoreMyPosition && hasCurrentPosition)
     {
       expected.front().m_position = currentPosition;
-      expected.front().m_title.clear();
+      expected.front().m_title = "My Position";
       expected.front().m_subTitle.clear();
     }
 
@@ -986,5 +1001,265 @@ UNIT_TEST(RoutingManager_RebuildClearsUnavailableAlternatives)
   while (!recovered)
     guiThread->RunNext();
   TEST(session.SwapActiveAlternative(1), ("Fresh alternatives must become selectable."));
+}
+
+// SetSettingsDir redirects route files, but settings:: retains its process-wide storage.
+// Restore the router setting separately so the fixture does not change another test's routing mode.
+class RoutingTestSettings
+{
+public:
+  RoutingTestSettings() : m_settingsDir(GetPlatform().SettingsDir()), m_hadRouter(settings::Get("router", m_router))
+  {
+    GetPlatform().SetSettingsDir(m_dir);
+    auto gui = std::make_unique<TestGuiThread>();
+    m_gui = gui.get();
+    GetPlatform().SetGuiThread(std::move(gui));
+  }
+  ~RoutingTestSettings()
+  {
+    if (m_hadRouter)
+      settings::Set("router", m_router);
+    else
+      settings::Delete("router");
+    GetPlatform().SetSettingsDir(m_settingsDir);
+    GetPlatform().SetGuiThread(std::make_unique<platform::GuiThread>());
+  }
+  void DrainGui() { m_gui->Drain(); }
+  bool RunNextGui() { return m_gui->TryRunNext(); }
+
+private:
+  TestGuiThread * m_gui = nullptr;
+  std::string const m_dir = GetPlatform().WritablePathForFile("routing_manager_test_settings");
+  platform::tests_support::ScopedDirCleanup m_dirCleanup{m_dir};
+  std::string m_settingsDir;
+  std::string m_router;
+  bool m_hadRouter;
+};
+
+class RoutingManagerTest
+{
+public:
+  RoutingManagerTest() : m_manager(m_framework.GetRoutingManager()) {}
+
+  ~RoutingManagerTest() { WaitForFileThread(); }
+
+protected:
+  template <typename Predicate>
+  void WaitUntil(Predicate && ready)
+  {
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ready() && std::chrono::steady_clock::now() < deadline)
+    {
+      m_settings.DrainGui();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST(ready(), ("Asynchronous routing operation timed out"));
+  }
+
+  static RouteMarkData MakePoint(RouteMarkType type, double lat, std::string title, size_t index = 0)
+  {
+    RouteMarkData point;
+    point.m_pointType = type;
+    point.m_intermediateIndex = index;
+    point.m_position = mercator::FromLatLon(lat, 1);
+    point.m_title = std::move(title);
+    point.m_subTitle = "subtitle:" + point.m_title;
+    return point;
+  }
+
+  void SavePoints()
+  {
+    m_manager.SaveRoutePoints();
+    WaitForFileThread();
+  }
+
+  RoutingTestSettings m_settings;
+  Framework m_framework{FrameworkParams(false /* m_enableDiffs */)};
+  RoutingManager & m_manager;
+};
+
+UNIT_CLASS_TEST(RoutingManagerTest, LoadingSavedPointsDoesNotReplaceANewItinerary)
+{
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 1, "start"), MakePoint(RouteMarkType::Finish, 2, "finish")});
+  SavePoints();
+  m_manager.RemoveRoutePoints();
+  bool done = false;
+  m_manager.LoadRoutePoints([&](bool success)
+  {
+    TEST(!success, ());
+    done = true;
+  });
+  m_manager.AddRoutePoint(MakePoint(RouteMarkType::Start, 3, "new start"), false);
+  m_manager.AddRoutePoint(MakePoint(RouteMarkType::Finish, 4, "new finish"), false);
+  WaitUntil([&] { return done; });
+  TEST_EQUAL(m_manager.GetRoutePoints().back().m_title, "new finish", ());
+  WaitForFileThread();
+  TEST(!m_manager.HasSavedRoutePoints(), ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, BatchUsesArrayOrderAtThePointLimit)
+{
+  std::vector<RouteMarkData> points;
+  for (size_t i = 0; i < RoutePointsLayout::kMaxRoutePointsCount; ++i)
+    points.push_back(MakePoint(RouteMarkType::Start, 1 + i * 0.001, std::to_string(i), 99));
+  m_manager.ReplaceRoutePoints(points);
+  auto const actual = m_manager.GetRoutePoints();
+  TEST_EQUAL(actual.size(), points.size(), ());
+  TEST(actual.front().m_pointType == RouteMarkType::Start, ());
+  TEST(actual.back().m_pointType == RouteMarkType::Finish, ());
+  for (size_t i = 0; i < actual.size(); ++i)
+  {
+    TEST_EQUAL(actual[i].m_title, points[i].m_title, (i));
+    TEST_EQUAL(actual[i].m_subTitle, points[i].m_subTitle, (i));
+    if (i > 0 && i + 1 < actual.size())
+    {
+      TEST(actual[i].m_pointType == RouteMarkType::Intermediate, (i));
+      TEST_EQUAL(actual[i].m_intermediateIndex, i - 1, (i));
+    }
+  }
+
+  m_manager.AddRoutePoint(MakePoint(RouteMarkType::Intermediate, 3, "rejected stop"), true /* optimize */);
+  auto const afterRejectedInsert = m_manager.GetRoutePoints();
+  TEST_EQUAL(afterRejectedInsert.size(), actual.size(), ());
+  for (size_t i = 0; i < actual.size(); ++i)
+    TEST_EQUAL(afterRejectedInsert[i].m_title, actual[i].m_title, (i));
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, BatchInvalidatesPreviousRouteTransactions)
+{
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 1, "start"), MakePoint(RouteMarkType::Finish, 2, "finish")});
+  auto const transaction = m_manager.OpenRoutePointsTransaction();
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 3, "new start"), MakePoint(RouteMarkType::Finish, 4, "new finish")});
+  m_manager.CancelRoutePointsTransaction(transaction);
+  auto const points = m_manager.GetRoutePoints();
+  TEST_EQUAL(points.size(), 2, ());
+  TEST_EQUAL(points.front().m_title, "new start", ());
+  TEST_EQUAL(points.back().m_title, "new finish", ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, MyPositionTitleUsesCoreStrings)
+{
+  auto start = MakePoint(RouteMarkType::Start, 1, "");
+  start.m_isMyPosition = true;
+  m_manager.ReplaceRoutePoints({start, MakePoint(RouteMarkType::Finish, 2, "finish")});
+  TEST_EQUAL(m_manager.GetRoutePoints().front().m_title, "My Position", ());
+  m_framework.AddString("core_my_position", "Localized position");
+  m_manager.ReplaceRoutePoints({start, MakePoint(RouteMarkType::Finish, 2, "finish")});
+  TEST_EQUAL(m_manager.GetRoutePoints().front().m_title, "Localized position", ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, RestoredMyPositionReplacesSavedLabels)
+{
+  auto start = MakePoint(RouteMarkType::Start, 1, "saved label");
+  start.m_replaceWithMyPositionAfterRestart = true;
+  m_manager.ReplaceRoutePoints({start, MakePoint(RouteMarkType::Finish, 2, "finish")});
+  SavePoints();
+  m_manager.RemoveRoutePoints();
+  auto const currentPosition = mercator::FromLatLon(1.1, 1);
+  m_framework.GetBookmarkManager().MyPositionMark().SetUserPosition(currentPosition, true);
+  bool loaded = false;
+  m_manager.LoadRoutePoints([&](bool success)
+  {
+    TEST(success, ());
+    loaded = true;
+  });
+  WaitUntil([&] { return loaded; });
+  auto const restored = m_manager.GetRoutePoints().front();
+  TEST(restored.m_isMyPosition, ());
+  TEST(!restored.m_replaceWithMyPositionAfterRestart, ());
+  TEST_EQUAL(restored.m_position, currentPosition, ());
+  TEST_EQUAL(restored.m_title, "My Position", ());
+  TEST(restored.m_subTitle.empty(), ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, UnknownMyPositionKeepsIntermediateOrder)
+{
+  auto start = MakePoint(RouteMarkType::Start, 1, "my position");
+  start.m_isMyPosition = true;
+  start.m_position = m2::PointD::Zero();
+  m_manager.ReplaceRoutePoints({start, MakePoint(RouteMarkType::Finish, 1.004, "finish")});
+  m_manager.AddRoutePoint(MakePoint(RouteMarkType::Intermediate, 1.003, "C", 0), true /* optimize */);
+  m_manager.AddRoutePoint(MakePoint(RouteMarkType::Intermediate, 1.001, "A", 1), true /* optimize */);
+  auto const points = m_manager.GetRoutePoints();
+  TEST_EQUAL(points[1].m_title, "C", ());
+  TEST_EQUAL(points[2].m_title, "A", ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, CancelledNewRouteMustInvalidatePendingRestore)
+{
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 1, "start"), MakePoint(RouteMarkType::Finish, 2, "finish")});
+  m_manager.SaveRoutePoints();
+  WaitForFileThread();
+  m_manager.RemoveRoutePoints();
+  bool done = false;
+  bool loaded = false;
+  m_manager.LoadRoutePoints([&](bool success)
+  {
+    loaded = success;
+    done = true;
+  });
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 3, "new start"), MakePoint(RouteMarkType::Finish, 4, "new finish")});
+  m_manager.CloseRouting(true);
+  WaitUntil([&] { return done; });
+  TEST(!loaded, ("An obsolete restore must not resurrect a route after cancellation"));
+  TEST_EQUAL(m_manager.GetRoutePointsCount(), 0, ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, SavedRouteCompletionBelongsToLoadedItinerary)
+{
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 1, "start"), MakePoint(RouteMarkType::Finish, 2, "finish")});
+  m_manager.SaveRoutePoints();
+  WaitForFileThread();
+  m_manager.RemoveRoutePoints();
+  bool completed = false;
+  m2::PointD restoredFinish;
+  m_manager.LoadRoutePoints([&](bool success)
+  {
+    TEST(success, ());
+    restoredFinish = m_manager.GetRoutePoints().back().m_position;
+    completed = true;
+  });
+  WaitForFileThread();
+  // Stop pumping as soon as the saved marks appear, then replace them before the next GUI task.
+  while (m_manager.GetRoutePointsCount() == 0)
+    TEST(m_settings.RunNextGui(), ());
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 3, "new start"), MakePoint(RouteMarkType::Finish, 4, "new finish")});
+  m_settings.DrainGui();
+  TEST(completed, ());
+  TEST_EQUAL(restoredFinish, mercator::FromLatLon(2, 1), ());
+  TEST_EQUAL(m_manager.GetRoutePoints().back().m_position, mercator::FromLatLon(4, 1), ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, MyPositionIntermediateUsesCurrentPosition)
+{
+  auto & bookmarks = m_framework.GetBookmarkManager();
+  bookmarks.MyPositionMark().SetUserPosition({9, 5}, true);
+  auto moving = MakeRoutePointOnXAxis(RouteMarkType::Intermediate, 0, 9);
+  moving.m_isMyPosition = true;
+  m_manager.ReplaceRoutePoints({MakeRoutePointOnXAxis(RouteMarkType::Start, 0, 0), moving,
+                                MakeRoutePointOnXAxis(RouteMarkType::Intermediate, 1, 3),
+                                MakeRoutePointOnXAxis(RouteMarkType::Finish, 0, 10)});
+  bookmarks.MyPositionMark().SetUserPosition({1, 0}, true);
+  m_manager.OptimizeRoutePoints();
+  auto const points = m_manager.GetRoutePoints();
+  TEST(points[1].m_isMyPosition, (points[1].m_position, points[2].m_position));
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, UnknownMyPositionIntermediateKeepsOrder)
+{
+  auto moving = MakeRoutePointOnXAxis(RouteMarkType::Intermediate, 1, 9);
+  moving.m_isMyPosition = true;
+  m_manager.ReplaceRoutePoints({MakeRoutePointOnXAxis(RouteMarkType::Start, 0, 0),
+                                MakeRoutePointOnXAxis(RouteMarkType::Intermediate, 0, 3), moving,
+                                MakeRoutePointOnXAxis(RouteMarkType::Finish, 0, 10)});
+  TEST(!m_manager.OptimizeRoutePoints(), ());
+  TEST(m_manager.GetRoutePoints()[2].m_isMyPosition, ());
 }
 }  // namespace routing_manager_tests

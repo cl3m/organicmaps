@@ -1467,9 +1467,9 @@ JNIEXPORT jboolean Java_app_organicmaps_sdk_Framework_nativeContinueRouteToPoint
       MakeRouteMarkData(env, title, subtitle, RouteMarkType::Finish, isMyPosition, lat, lon));
 }
 
-JNIEXPORT void Java_app_organicmaps_sdk_Framework_nativeRemoveRoutePoints(JNIEnv * env, jclass)
+JNIEXPORT void Java_app_organicmaps_sdk_Framework_nativeReplaceRoutePoints(JNIEnv * env, jclass, jobjectArray points)
 {
-  frm()->GetRoutingManager().RemoveRoutePoints();
+  frm()->GetRoutingManager().ReplaceRoutePoints(routing_jni::ToNativeRouteMarkDataArray(env, points));
 }
 
 JNIEXPORT void Java_app_organicmaps_sdk_Framework_nativeReplaceRoutePoint(JNIEnv * env, jclass, jstring title,
