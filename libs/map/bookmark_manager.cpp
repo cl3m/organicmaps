@@ -137,7 +137,7 @@ BookmarkManager::SharingResult ExportSingleFileGeoJson(
   auto filePath = base::JoinPath(GetPlatform().TmpDir(), fileName + std::string(kGeoJsonExtension));
   auto const categoryId = kmlToShare.second->m_categoryData.m_id;
   if (!SaveKmlFileSafe(*kmlToShare.second, filePath, FileType::GeoJson))
-    return {{categoryId}, BookmarkManager::SharingResult::Code::FileError, "Bookmarks file does not exist."};
+    return {{categoryId}, BookmarkManager::SharingResult::Code::FileError, "Could not export the list as GeoJSON."};
   return {{categoryId}, std::move(filePath), kGeoJsonMimeType};
 }
 
@@ -3023,14 +3023,13 @@ void BookmarkManager::PrepareFileForSharing(kml::GroupIdCollection && categories
   CHECK_THREAD_CHECKER(m_threadChecker, ());
   ASSERT(handler, ());
   // Reject unsupported exports before copying polygon geometry or creating files.
-  if (fileType == FileType::Gpx || fileType == FileType::GeoJson)
+  if (fileType == FileType::Gpx)
   {
     for (auto const groupId : categoriesIds)
     {
       if (!GetAreaIds(groupId).empty())
       {
-        handler(SharingResult({groupId}, SharingResult::Code::FileError,
-                              "Polygon areas can only be exported as KML or KMZ."));
+        handler(SharingResult({groupId}, SharingResult::Code::FileError, "Polygon areas cannot be exported as GPX."));
         return;
       }
     }
