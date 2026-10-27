@@ -51,6 +51,10 @@ struct AreaData
   Timestamp m_timestamp = {};
   Properties m_properties;
   std::vector<AreaPolygon> m_polygons;
+  // Preserve GeoJSON MultiPolygon grouping through native KML storage.
+  bool m_isMultiPolygon = false;
+  // GeoJSON Z values use WGS84 ellipsoid heights; KML altitude modes use other references.
+  bool m_altitudeIsWgs84 = false;
 
   bool operator==(AreaData const & other) const;
 };

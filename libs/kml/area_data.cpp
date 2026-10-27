@@ -93,7 +93,8 @@ bool AreaData::operator==(AreaData const & other) const
 {
   return m_id == other.m_id && m_name == other.m_name && m_description == other.m_description &&
          m_style == other.m_style && m_visible == other.m_visible && IsEqual(m_timestamp, other.m_timestamp) &&
-         m_properties == other.m_properties && m_polygons == other.m_polygons;
+         m_properties == other.m_properties && m_polygons == other.m_polygons &&
+         m_isMultiPolygon == other.m_isMultiPolygon && m_altitudeIsWgs84 == other.m_altitudeIsWgs84;
 }
 
 std::string DebugPrint(AreaData const & area)

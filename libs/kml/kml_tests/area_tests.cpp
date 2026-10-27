@@ -165,8 +165,294 @@ UNIT_TEST(Area_UnsupportedFormatsDoNotWritePartialOutput)
   TEST(output.empty(), ());
   TEST_ANY_THROW(kml::gpx::GpxWriter(writer).Write(data), ());
   TEST(output.empty(), ());
-  TEST_ANY_THROW(kml::GeoJsonWriter(writer).Write(data, false), ());
-  TEST(output.empty(), ());
+}
+
+UNIT_TEST(Area_GeoJsonMultiPolygonSurvivesNativeStorage)
+{
+  std::string const input = R"({"type":"Feature","properties":{
+    "name":"Survey","description":"A & B","visibility":false,
+    "fill":"#123456","fill-opacity":0.5,"stroke":"#654321","stroke-opacity":0.25,
+    "stroke-width":3.5,"time":"2024-04-16T12:34:56Z"},"geometry":{
+    "type":"MultiPolygon","coordinates":[
+      [[[0,0,0],[10,0],[10,10],[0,10],[0,0,0]],[[2,2],[8,2],[8,8],[2,8],[2,2]]],
+      [[[14.1234567890123,0,1.23456789012345],[15,0],[14,1],[14.1234567890123,0,1.23456789012345]]]
+    ]}})";
+  kml::FileData data;
+  kml::GeoJsonReader(data).Deserialize(input);
+  TEST_EQUAL(data.m_areasData.size(), 1, ());
+  auto const & area = data.m_areasData.front();
+  TEST(area.m_isMultiPolygon, ());
+  TEST(area.m_altitudeIsWgs84, ());
+  TEST_EQUAL(area.m_polygons.size(), 2, ());
+  TEST_EQUAL(area.m_polygons.front().m_holes.size(), 1, ());
+  TEST_EQUAL(area.m_style.m_fillColor, 0x12345680, ());
+  TEST_EQUAL(area.m_style.m_outlineColor, 0x65432140, ());
+  TEST_EQUAL(area.m_style.m_outlineWidth, 3.5, ());
+  TEST_EQUAL(kml::GetDefaultStr(area.m_name), "Survey", ());
+  TEST_EQUAL(kml::GetDefaultStr(area.m_description), "A & B", ());
+  TEST_EQUAL(area.m_timestamp, kml::TimestampClock::from_time_t(base::StringToTimestamp("2024-04-16T12:34:56Z")), ());
+  TEST_EQUAL(area.m_polygons[1].m_outer.front().m_latLon, ms::LatLon(0, 14.1234567890123), ());
+  TEST_EQUAL(area.m_polygons[1].m_outer.front().m_altitude, std::optional<double>(1.23456789012345), ());
+  TEST(!area.m_visible, ());
+
+  for (size_t const parts : {2, 1})
+  {
+    data.m_areasData.front().m_polygons.resize(parts);
+    std::string kml;
+    MemWriter kmlWriter(kml);
+    kml::KmlWriter(kmlWriter).Write(data);
+    kml::FileData stored;
+    kml::DeserializerKml(stored).Deserialize(MemReader(kml.data(), kml.size()));
+    TEST_EQUAL(stored.m_areasData, data.m_areasData, ());
+    for (bool minimize : {false, true})
+    {
+      std::string json;
+      MemWriter jsonWriter(json);
+      kml::GeoJsonWriter(jsonWriter).Write(stored, minimize);
+      kml::FileData loaded;
+      kml::GeoJsonReader(loaded).Deserialize(json);
+      TEST_EQUAL(loaded.m_areasData, data.m_areasData, (json));
+    }
+  }
+}
+
+UNIT_TEST(Area_GeoJsonPolygonRootsAndInvalidRing)
+{
+  for (
+      std::string const & input :
+      {R"({"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]})",
+       R"({"type":"Feature","properties":null,"geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}})",
+       R"({"type":"FeatureCollection","features":[{"type":"Feature","properties":null,"geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}}]})",
+       R"({"features":[{"type":"Feature","properties":null,"geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}}]})",
+       R"({"features":[{"type":"Feature","properties":null,"geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}}],"type":"FeatureCollection"})"})
+  {
+    kml::FileData data;
+    kml::GeoJsonReader(data).Deserialize(input);
+    TEST_EQUAL(data.m_areasData.size(), 1, (input));
+    TEST(!data.m_areasData.front().m_isMultiPolygon, ());
+    TEST(!data.m_areasData.front().m_altitudeIsWgs84, ());
+  }
+  std::string const invalid = R"({"type":"FeatureCollection","features":[
+    {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[0,0],[1],[2,0],[0,2],[0,0]]]}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[1,1]}}
+  ]})";
+  kml::FileData data;
+  kml::GeoJsonReader(data).Deserialize(invalid);
+  TEST(data.m_areasData.empty(), ());
+  TEST_EQUAL(data.m_bookmarksData.size(), 1, ());
+}
+
+UNIT_TEST(Area_GeoJsonExtraCoordinatesAndNumericTimestamp)
+{
+  kml::FileData data;
+  kml::GeoJsonReader(data).Deserialize(R"({"type":"Feature","properties":{"time":1700000000},"geometry":{
+    "type":"Polygon","coordinates":[[[0,0,10,123],[2,0,20,456],[0,2,30,789],[0,0,10,123]]]}})");
+  TEST_EQUAL(data.m_areasData.size(), 1, ());
+  auto const & area = data.m_areasData.front();
+  TEST(area.m_altitudeIsWgs84, ());
+  TEST_EQUAL(area.m_timestamp, kml::TimestampClock::from_time_t(1700000000), ());
+  TEST_EQUAL(area.m_polygons.front().m_outer.size(), 3, ());
+  TEST_EQUAL(area.m_polygons.front().m_outer.front().m_altitude, std::optional<double>(10), ());
+}
+
+UNIT_TEST(Area_GeoJsonUmapStyleSurvivesNativeStorage)
+{
+  kml::FileData data;
+  kml::GeoJsonReader(data).Deserialize(R"({"type":"Feature","properties":{
+    "fill":"#FFFFFF","stroke":"#FFFFFF","_umap_options":{
+      "color":"#123456","fillColor":"#654321","opacity":0.5,"fillOpacity":0.25,
+      "weight":3.5,"dashArray":"5,10"}},
+    "geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}})");
+  TEST_EQUAL(data.m_areasData.size(), 1, ());
+  auto const & area = data.m_areasData.front();
+  TEST_EQUAL(area.m_style.m_fillColor, 0x65432140, ());
+  TEST_EQUAL(area.m_style.m_outlineColor, 0x12345680, ());
+  TEST_EQUAL(area.m_style.m_outlineWidth, 3.5, ());
+  TEST(area.m_style.m_fill && area.m_style.m_outline, ());
+  TEST(area.m_properties.contains("_umap_options"), ());
+
+  std::string native;
+  MemWriter nativeWriter(native);
+  kml::KmlWriter(nativeWriter).Write(data);
+  auto const stored = ReadKml(native);
+  TEST_EQUAL(stored.m_areasData, data.m_areasData, ());
+  std::string json;
+  MemWriter jsonWriter(json);
+  kml::GeoJsonWriter(jsonWriter).Write(stored, true);
+  kml::FileData loaded;
+  kml::GeoJsonReader(loaded).Deserialize(json);
+  TEST_EQUAL(loaded.m_areasData.size(), 1, (json));
+  TEST(loaded.m_areasData.front().m_style == area.m_style, (json));
+  kml::geojson::GeoJsonData exported;
+  TEST(!glz::read_json(exported, json), ());
+  auto const & options = exported.features.front().properties->at("_umap_options").get_object();
+  TEST_EQUAL(options.at("dashArray").get_string(), "5,10", ());
+}
+
+UNIT_TEST(Area_GeoJsonKeepsDistinctVerticesAtSourcePrecision)
+{
+  kml::FileData data;
+  auto & area = data.m_areasData.emplace_back();
+  area.m_polygons.push_back({Ring({{14.123456789, 0}, {14.123456790, 0}, {14.123456789, 1}}), {}});
+  TEST(kml::NormalizeAreaGeometry(area.m_polygons), ());
+  for (bool minimize : {false, true})
+  {
+    std::string json;
+    MemWriter writer(json);
+    kml::GeoJsonWriter(writer).Write(data, minimize);
+    if (!minimize)
+      TEST(json.starts_with("{\n  \"type\":"), (json));
+    kml::FileData loaded;
+    kml::GeoJsonReader(loaded).Deserialize(json);
+    TEST_EQUAL(loaded.m_areasData, data.m_areasData, (json));
+  }
+}
+
+UNIT_TEST(Area_GeoJsonMalformedPolygonKeepsOtherFeatures)
+{
+  for (std::string const & coordinates : {R"([[[0,0],[2,null],[0,2],[0,0]]])", R"([[[0,0],[2,"invalid"],[0,2],[0,0]]])",
+                                          R"([[[0,0,1],[2,0,null],[0,2,1],[0,0,1]]])",
+                                          R"([[[0,0],[181,0],[0,2],[0,0]]])", R"([[[0,0],[1e300,0],[0,2],[0,0]]])"})
+  {
+    std::string const input = R"({"type":"FeatureCollection","features":[
+      {"type":"Feature","properties":{"name":"Point"},"geometry":{"type":"Point","coordinates":[1,1]}},
+      {"type":"Feature","properties":{"name":"Line","stroke":"red"},"geometry":{"type":"LineString","coordinates":[[1,1],[2,2]]}},
+      {"type":"Feature","geometry":{"type":"Polygon","coordinates":)" +
+                              coordinates + R"(}},
+      {"type":"Feature","properties":{"name":"Area"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[2,0],[0,2],[0,0]]]}}
+    ]})";
+    kml::FileData data;
+    kml::GeoJsonReader(data).Deserialize(input);
+    TEST_EQUAL(data.m_bookmarksData.size(), 1, (coordinates));
+    TEST_EQUAL(data.m_tracksData.size(), 1, (coordinates));
+    TEST_EQUAL(data.m_areasData.size(), 1, (coordinates));
+    TEST_EQUAL(kml::GetDefaultStr(data.m_bookmarksData.front().m_name), "Point", ());
+    TEST_EQUAL(kml::GetDefaultStr(data.m_tracksData.front().m_name), "Line", ());
+    TEST_EQUAL(kml::GetDefaultStr(data.m_areasData.front().m_name), "Area", ());
+  }
+}
+
+UNIT_TEST(Area_GeoJsonWidePolygonRetainsFootprintAndHeights)
+{
+  for (double const lon : {170.0, 180.0})
+  {
+    for (bool closed : {false, true})
+    {
+      kml::geojson::GeoJsonGeometryPolygon geometry;
+      geometry.coordinates = {{{lon, -10, 100}, {lon, 10, 200}, {-lon, 10, 300}, {-lon, -10, 400}},
+                              {{-5, -5}, {-5, 5}, {5, 5}, {5, -5}, {-5, -5}}};
+      if (closed)
+        geometry.coordinates.front().push_back(geometry.coordinates.front().front());
+      std::string input;
+      TEST(!glz::write_json(geometry, input), ());
+      kml::FileData data;
+      kml::GeoJsonReader(data).Deserialize(input);
+      TEST_EQUAL(data.m_areasData.size(), 1, (closed));
+      auto const & area = data.m_areasData.front();
+      auto expected = Ring({{lon, -10}, {lon, 10}, {0, 10}, {-lon, 10}, {-lon, -10}, {0, -10}});
+      std::vector<double> const heights = {100, 200, 250, 300, 400, 250};
+      for (size_t i = 0; i < expected.size(); ++i)
+        expected[i].m_altitude = heights[i];
+      TEST(area.m_polygons.front().m_outer == expected, (input));
+      TEST_EQUAL(area.m_polygons.front().m_holes.size(), 1, ());
+      TEST_EQUAL(SignedRingArea(area.m_polygons.front().m_outer), 40 * lon, ());
+      TEST_EQUAL(SignedRingArea(area.m_polygons.front().m_holes.front()), -100, ());
+
+      std::string native;
+      MemWriter nativeWriter(native);
+      kml::KmlWriter(nativeWriter).Write(data);
+      auto const stored = ReadKml(native);
+      TEST_EQUAL(stored.m_areasData, data.m_areasData, ());
+      std::string json;
+      MemWriter jsonWriter(json);
+      kml::GeoJsonWriter(jsonWriter).Write(stored, true);
+      kml::FileData loaded;
+      kml::GeoJsonReader(loaded).Deserialize(json);
+      TEST_EQUAL(loaded.m_areasData, data.m_areasData, (json));
+    }
+  }
+}
+
+UNIT_TEST(Area_GeoJsonKeepsIndependentKmlPartsSeparate)
+{
+  kml::FileData data;
+  auto & area = data.m_areasData.emplace_back();
+  area.m_polygons = {{Ring({{0, 0}, {4, 0}, {4, 4}, {0, 4}}), {}}, {Ring({{2, 0}, {6, 0}, {6, 4}, {2, 4}}), {}}};
+  TEST(kml::NormalizeAreaGeometry(area.m_polygons), ());
+  std::string json;
+  MemWriter writer(json);
+  kml::GeoJsonWriter(writer).Write(data, true);
+  kml::FileData loaded;
+  kml::GeoJsonReader(loaded).Deserialize(json);
+  TEST_EQUAL(loaded.m_areasData.size(), 2, (json));
+  TEST(loaded.m_areasData[0].m_polygons.front() == area.m_polygons[0], ());
+  TEST(loaded.m_areasData[1].m_polygons.front() == area.m_polygons[1], ());
+
+  area.m_polygons.front().m_altitudeMode = "relativeToGround";
+  json.clear();
+  TEST_ANY_THROW(kml::GeoJsonWriter(writer).Write(data, true), ());
+  TEST(json.empty(), ());
+}
+
+UNIT_TEST(Area_GeoJsonDoesNotReinterpretKmlHeights)
+{
+  for (std::string const & mode : {"", "clampToGround", "relativeToGround", "absolute"})
+  {
+    kml::FileData data;
+    auto & geoJsonArea = data.m_areasData.emplace_back();
+    geoJsonArea.m_altitudeIsWgs84 = true;
+    geoJsonArea.m_polygons.push_back({Ring({{0, 0}, {2, 0}, {0, 2}}), {}});
+    geoJsonArea.m_polygons.front().m_outer.front().m_altitude = 3.25;
+    auto & polygon = data.m_areasData.emplace_back().m_polygons.emplace_back();
+    polygon.m_outer = Ring({{0, 0}, {2, 0}, {0, 2}});
+    polygon.m_outer.front().m_altitude = 12.5;
+    polygon.m_altitudeMode = mode;
+    std::string native;
+    MemWriter nativeWriter(native);
+    kml::KmlWriter(nativeWriter).Write(data);
+    auto const stored = ReadKml(native);
+    TEST_EQUAL(stored.m_areasData, data.m_areasData, (mode));
+    std::string json;
+    MemWriter jsonWriter(json);
+    if (mode.empty() || mode == "clampToGround")
+    {
+      kml::GeoJsonWriter(jsonWriter).Write(stored, true);
+      kml::FileData loaded;
+      kml::GeoJsonReader(loaded).Deserialize(json);
+      TEST_EQUAL(loaded.m_areasData.size(), 2, (mode));
+      TEST_EQUAL(loaded.m_areasData.front(), data.m_areasData.front(), (json));
+      for (auto const & point : loaded.m_areasData.back().m_polygons.front().m_outer)
+        TEST(!point.m_altitude, (json));
+      TEST(!loaded.m_areasData.back().m_altitudeIsWgs84, (json));
+    }
+    else
+    {
+      TEST_ANY_THROW(kml::GeoJsonWriter(jsonWriter).Write(stored, true), (mode));
+      TEST(json.empty(), (mode));
+    }
+  }
+}
+
+UNIT_TEST(Area_GeoJsonDoesNotReinterpretKmlAntimeridianEdges)
+{
+  auto const data = ReadKml(R"(<kml><Document><Placemark><Polygon><outerBoundaryIs><LinearRing>
+    <coordinates>179,-10 -179,-10 -179,10 179,10 179,-10</coordinates>
+    </LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>)");
+  TEST_EQUAL(data.m_areasData.size(), 1, ());
+  std::string json;
+  MemWriter writer(json);
+  TEST_ANY_THROW(kml::GeoJsonWriter(writer).Write(data, true), ());
+  TEST(json.empty(), ());
+
+  auto const halfWorld = ReadKml(R"(<kml><Document><Placemark><Polygon><outerBoundaryIs><LinearRing>
+    <coordinates>-90,-10 90,-10 90,10 -90,10 -90,-10</coordinates>
+    </LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>)");
+  TEST_EQUAL(halfWorld.m_areasData.size(), 1, ());
+  kml::GeoJsonWriter(writer).Write(halfWorld, true);
+  kml::FileData loaded;
+  kml::GeoJsonReader(loaded).Deserialize(json);
+  TEST_EQUAL(loaded.m_areasData.size(), 1, ());
+  TEST(loaded.m_areasData.front().m_polygons == halfWorld.m_areasData.front().m_polygons, ());
 }
 
 UNIT_TEST(Area_KmlRoundTrip)
