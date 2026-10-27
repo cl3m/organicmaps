@@ -312,6 +312,9 @@ static bool ReadAreaPolygon(geojson::PolygonCoords const & coordinates, AreaPoly
         AppendIntermediateAreaPoint(ring, point);
       ring.push_back(point);
     }
+    if (ring.size() > 1 && ring.front().m_latLon == ring.back().m_latLon &&
+        ring.front().m_altitude != ring.back().m_altitude)
+      return false;
     if (ring.size() > 1)
       AppendIntermediateAreaPoint(ring, ring.front());
   }

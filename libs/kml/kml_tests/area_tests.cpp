@@ -255,6 +255,30 @@ UNIT_TEST(Area_GeoJsonExtraCoordinatesAndNumericTimestamp)
   TEST_EQUAL(area.m_polygons.front().m_outer.front().m_altitude, std::optional<double>(10), ());
 }
 
+UNIT_TEST(Area_GeoJsonRejectsConflictingClosingHeights)
+{
+  for (std::string const & ring :
+       {R"([[0,0,10],[4,0,10],[0,4,10],[0,0,20]])", R"([[0,0],[4,0],[0,4],[0,0,0]])", R"([[0,0,0],[4,0],[0,4],[0,0]])"})
+  {
+    std::string const shell = R"([[-1,-1],[5,-1],[5,5],[-1,5],[-1,-1]])";
+    for (std::string const & geometry : {R"({"type":"Polygon","coordinates":[)" + ring + "]}",
+                                         R"({"type":"Polygon","coordinates":[)" + shell + "," + ring + "]}",
+                                         R"({"type":"MultiPolygon","coordinates":[[)" + shell + "],[" + ring + "]]}"})
+    {
+      std::string const input = R"({"type":"FeatureCollection","features":[
+        {"type":"Feature","geometry":)" +
+                                geometry + R"(},
+        {"type":"Feature","properties":{"name":"Retained"},"geometry":{
+          "type":"Polygon","coordinates":[[[10,10],[12,10],[10,12],[10,10]]]}}
+      ]})";
+      kml::FileData data;
+      kml::GeoJsonReader(data).Deserialize(input);
+      TEST_EQUAL(data.m_areasData.size(), 1, (geometry));
+      TEST_EQUAL(kml::GetDefaultStr(data.m_areasData.front().m_name), "Retained", (geometry));
+    }
+  }
+}
+
 UNIT_TEST(Area_GeoJsonUmapStyleSurvivesNativeStorage)
 {
   kml::FileData data;
