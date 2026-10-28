@@ -12,6 +12,7 @@
 #include "platform/gui_thread.hpp"
 #include "platform/platform.hpp"
 #include "platform/platform_tests_support/scoped_dir.hpp"
+#include "platform/settings.hpp"
 
 #include "geometry/mercator.hpp"
 
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <future>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,28 @@ namespace routing_manager_tests
 {
 namespace
 {
+// Framework reads the saved router at initialization; optimization cases need a road router.
+class ScopedVehicleRouter
+{
+public:
+  ScopedVehicleRouter() : m_hasOriginal(settings::Get("router", m_original))
+  {
+    settings::Set("router", routing::ToString(routing::RouterType::Vehicle));
+  }
+
+  ~ScopedVehicleRouter()
+  {
+    if (m_hasOriginal)
+      settings::Set("router", m_original);
+    else
+      settings::Delete("router");
+  }
+
+private:
+  std::string m_original;
+  bool const m_hasOriginal;
+};
+
 // Pump only this fixture's tasks, not callbacks left by earlier Framework instances.
 class TestGuiThread final : public base::TaskLoop
 {
@@ -372,6 +396,7 @@ UNIT_TEST(RoutingManager_MoveSingleRoutePointBetweenEndpoints)
 
 UNIT_TEST(RoutingManager_OptimizationWithIncompleteRoute)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -386,6 +411,7 @@ UNIT_TEST(RoutingManager_OptimizationWithIncompleteRoute)
 
 UNIT_TEST(RoutingManager_OptimizationCannotChangeWhileFollowing)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -424,6 +450,7 @@ UNIT_TEST(RoutingManager_RulerPreservesMeasurementOrder)
 
 UNIT_TEST(RoutingManager_OptimizeRoutePointsUsesRouteMarks)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -441,6 +468,7 @@ UNIT_TEST(RoutingManager_OptimizeRoutePointsUsesRouteMarks)
 
 UNIT_TEST(RoutingManager_OptimizationNeverIncreasesRouteLength)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -484,6 +512,7 @@ UNIT_TEST(RoutingManager_OptimizationNeverIncreasesRouteLength)
 
 UNIT_TEST(RoutingManager_ManualEditsAndNextAddPreserveExistingOrder)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -503,6 +532,7 @@ UNIT_TEST(RoutingManager_ManualEditsAndNextAddPreserveExistingOrder)
 
 UNIT_TEST(RoutingManager_SaveLoadKeepsVisibleOrder)
 {
+  ScopedVehicleRouter const routerSetting;
   for (bool const enabled : {false, true})
   {
     WithSavedRoute([enabled](RoutingManager & manager, BookmarkManager &, TestGuiThread & guiThread)
@@ -594,6 +624,7 @@ UNIT_TEST(RoutingManager_AddAppendsRegardlessOfSuppliedIndex)
 
 UNIT_TEST(RoutingManager_NewStopInsertionUsesRouteEndpointsAndPreservesPassedStops)
 {
+  ScopedVehicleRouter const routerSetting;
   for (bool const passed : {false, true})
   {
     Framework framework(FrameworkParams(false /* m_enableDiffs */));
@@ -622,6 +653,7 @@ UNIT_TEST(RoutingManager_NewStopInsertionUsesRouteEndpointsAndPreservesPassedSto
 
 UNIT_TEST(RoutingManager_AddingEndpointDoesNotReorderStops)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
 
@@ -642,6 +674,7 @@ UNIT_TEST(RoutingManager_AddingEndpointDoesNotReorderStops)
 
 UNIT_TEST(RoutingManager_ReplacementAtCapacityKeepsSlot)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
   auto & bookmarks = framework.GetBookmarkManager();
@@ -702,6 +735,7 @@ UNIT_TEST(RoutingManager_ReplacingPassedStopMakesItPending)
 
 UNIT_TEST(RoutingManager_AddingOptimizedStopAfterPassedStopReplacement)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & manager = framework.GetRoutingManager();
   auto & bookmarks = framework.GetBookmarkManager();
@@ -736,6 +770,7 @@ UNIT_TEST(RoutingManager_ReplaceMissingStopAddsNormally)
 
 UNIT_TEST(RoutingManager_EndpointReplacementDoesNotOptimize)
 {
+  ScopedVehicleRouter const routerSetting;
   for (auto const type : {RouteMarkType::Start, RouteMarkType::Finish})
   {
     Framework framework(FrameworkParams(false /* m_enableDiffs */));
@@ -850,6 +885,7 @@ UNIT_TEST(RoutingManager_ContinueRouteToPointWithoutFinishFailsCleanly)
 
 UNIT_TEST(RoutingManager_OptimizeRoutePointsPreservesPassedStops)
 {
+  ScopedVehicleRouter const routerSetting;
   Framework framework(FrameworkParams(false /* m_enableDiffs */));
   auto & routingManager = framework.GetRoutingManager();
   auto & bookmarks = framework.GetBookmarkManager();
