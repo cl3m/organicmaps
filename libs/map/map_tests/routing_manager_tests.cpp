@@ -12,6 +12,7 @@
 #include "platform/gui_thread.hpp"
 #include "platform/platform.hpp"
 #include "platform/platform_tests_support/scoped_dir.hpp"
+#include "platform/settings.hpp"
 
 #include "geometry/mercator.hpp"
 
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <future>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -395,6 +397,38 @@ UNIT_TEST(RoutingManager_OptimizationCannotChangeWhileFollowing)
   TEST(manager.IsRoutingFollowing(), ());
   TEST(!manager.OptimizeRoutePoints(), ());
   TEST_EQUAL(GetStopCoordinates(manager), (std::vector<double>{3, 1, 2}), ());
+}
+
+UNIT_TEST(RoutingManager_SavedRouterFallback)
+{
+  std::string original;
+  bool const hadOriginal = settings::Get("router", original);
+  SCOPE_GUARD(restoreRouter, [&]
+  {
+    if (hadOriginal)
+      settings::Set("router", original);
+    else
+      settings::Delete("router");
+  });
+  Framework framework(FrameworkParams(false /* m_enableDiffs */));
+  auto const & manager = framework.GetRoutingManager();
+
+  for (int i = 0; i < static_cast<int>(routing::RouterType::Count); ++i)
+  {
+    auto const type = static_cast<routing::RouterType>(i);
+    settings::Set("router", routing::ToString(type));
+    TEST_EQUAL(manager.GetLastUsedRouter(), type, ());
+  }
+  for (std::string const value : {"future-router", "", "count", "Vehicle", "pedestrian "})
+  {
+    settings::Set("router", value);
+    TEST_EQUAL(manager.GetLastUsedRouter(), routing::RouterType::Vehicle, (value));
+    std::string retained;
+    TEST(settings::Get("router", retained), ());
+    TEST_EQUAL(retained, value, ());
+  }
+  settings::Delete("router");
+  TEST_EQUAL(manager.GetLastUsedRouter(), routing::RouterType::Vehicle, ());
 }
 
 UNIT_TEST(RoutingManager_RulerPreservesMeasurementOrder)

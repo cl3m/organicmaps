@@ -489,16 +489,8 @@ RouterType RoutingManager::GetLastUsedRouter() const
   if (!settings::Get(kRouterTypeKey, routerTypeStr))
     return RouterType::Vehicle;
 
-  auto const routerType = FromString(routerTypeStr);
-
-  switch (routerType)
-  {
-  case RouterType::Pedestrian:
-  case RouterType::Bicycle:
-  case RouterType::Transit:
-  case RouterType::Ruler: return routerType;
-  default: return RouterType::Vehicle;
-  }
+  // Preferences can contain an identifier unknown to this version.
+  return FromStringChecked(routerTypeStr).value_or(RouterType::Vehicle);
 }
 
 void RoutingManager::Init(std::shared_ptr<routing::NumMwmIds> ptr)

@@ -9,7 +9,9 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace routing
@@ -41,7 +43,10 @@ enum class RouterType
 };
 
 std::string ToString(RouterType type);
+/// Parse a validated identifier; unknown internal values assert in Debug.
 RouterType FromString(std::string const & str);
+/// Parse an external identifier; unknown values return std::nullopt.
+std::optional<RouterType> FromStringChecked(std::string_view str);
 std::string DebugPrint(RouterType type);
 
 class IRouter
