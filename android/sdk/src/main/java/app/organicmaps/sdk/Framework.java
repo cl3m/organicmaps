@@ -271,7 +271,6 @@ public class Framework
   public static native boolean nativeAddRoutePoint(String title, String subtitle, @NonNull RouteMarkType markType,
                                                    boolean isMyPosition, double lat, double lon,
                                                    boolean allowOptimization);
-  public static native void nativeReplaceRoutePoints(@NonNull RouteMarkData[] points);
 
   public static native void nativeReplaceRoutePoint(String title, String subtitle, @NonNull RouteMarkType markType,
                                                     int intermediateIndex, boolean isMyPosition, double lat,

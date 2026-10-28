@@ -79,7 +79,7 @@ public class ManageRouteAdapterTest
   }
 
   @Test
-  public void nonAdjacentMovesPreserveTheInterveningOrderAndRenumberStops()
+  public void nonAdjacentMovesPreserveTheInterveningOrderAndTheNativeSnapshot()
   {
     final int[][] moves = {{0, 3}, {3, 0}, {1, 3}, {3, 1}};
     final List<List<String>> orders = List.of(List.of("B", "C", "D", "A"), List.of("D", "A", "B", "C"),
@@ -91,6 +91,7 @@ public class ManageRouteAdapterTest
                                       point("C", RouteMarkType.Intermediate, 1), point("D", RouteMarkType.Finish, 0)};
       final ManageRouteAdapter adapter =
           spy(new ManageRouteAdapter(mock(Context.class), points, mock(ManageRouteAdapter.ManageRouteListener.class)));
+      final List<RouteMarkData> snapshot = adapter.getRoutePoints();
       doNothing().when(adapter).notifyItemMoved(anyInt(), anyInt());
 
       final RecyclerView.ViewHolder source = mock(RecyclerView.ViewHolder.class);
@@ -100,15 +101,43 @@ public class ManageRouteAdapterTest
       adapter.moveRoutePoint(source, target);
 
       assertEquals(orders.get(caseIndex), adapter.getRoutePoints().stream().map(p -> p.mTitle).toList());
-      assertEquals(RouteMarkType.Start, adapter.getRoutePoints().get(0).mPointType);
-      assertEquals(RouteMarkType.Finish, adapter.getRoutePoints().get(3).mPointType);
+      assertEquals(List.of("A", "B", "C", "D"), snapshot.stream().map(p -> p.mTitle).toList());
+      assertEquals(RouteMarkType.Start, points[0].mPointType);
+      assertEquals(RouteMarkType.Finish, points[3].mPointType);
       for (int index = 1; index < 3; ++index)
       {
-        assertEquals(RouteMarkType.Intermediate, adapter.getRoutePoints().get(index).mPointType);
-        assertEquals(index - 1, adapter.getRoutePoints().get(index).mIntermediateIndex);
+        assertEquals(RouteMarkType.Intermediate, points[index].mPointType);
+        assertEquals(index - 1, points[index].mIntermediateIndex);
       }
       verify(adapter).notifyItemMoved(move[0], move[1]);
     }
+  }
+
+  @Test
+  public void draggingPreviewsEndpointRolesWithoutChangingTheNativeSnapshot()
+  {
+    final Context context = mock(Context.class);
+    final RouteMarkData start = point("A", RouteMarkType.Start, 0);
+    final RouteMarkData finish = point("D", RouteMarkType.Finish, 0);
+    final ManageRouteAdapter adapter = spy(new ManageRouteAdapter(context, new RouteMarkData[] {start, finish},
+                                                                  mock(ManageRouteAdapter.ManageRouteListener.class)));
+    doNothing().when(adapter).notifyItemMoved(anyInt(), anyInt());
+    final RecyclerView.ViewHolder source = mock(RecyclerView.ViewHolder.class);
+    final RecyclerView.ViewHolder target = mock(RecyclerView.ViewHolder.class);
+    when(source.getBindingAdapterPosition()).thenReturn(0);
+    when(target.getBindingAdapterPosition()).thenReturn(1);
+    adapter.moveRoutePoint(source, target);
+    try (MockedStatic<ThemeUtils> theme = mockStatic(ThemeUtils.class);
+         MockedStatic<AppCompatResources> drawables = mockStatic(AppCompatResources.class))
+    {
+      adapter.onBindViewHolder(holder(), 0);
+      drawables.verify(() -> AppCompatResources.getDrawable(context, R.drawable.route_point_start));
+      drawables.clearInvocations();
+      adapter.onBindViewHolder(holder(), 1);
+      drawables.verify(() -> AppCompatResources.getDrawable(context, R.drawable.route_point_finish));
+    }
+    assertEquals(RouteMarkType.Start, start.mPointType);
+    assertEquals(RouteMarkType.Finish, finish.mPointType);
   }
 
   @Test

@@ -299,6 +299,7 @@ public:
   routing::RouterType GetCurrentRouterType() const { return m_currentRouterType; }
 
 private:
+  void OnRoutePointsEdited();
   void SetRouterImpl(routing::RouterType type);
 
   struct RoadInfo

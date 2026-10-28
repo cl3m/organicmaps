@@ -2,9 +2,10 @@ package app.organicmaps.sdk.routing;
 
 import androidx.annotation.Keep;
 import androidx.annotation.Nullable;
+import java.util.Objects;
 
 /**
- * Represents RouteMarkData from core.
+ * Immutable snapshot of a route point from core.
  */
 // Called from JNI.
 @Keep
@@ -15,8 +16,8 @@ public final class RouteMarkData
   public final String mTitle;
   @Nullable
   public final String mSubtitle;
-  public RouteMarkType mPointType;
-  public int mIntermediateIndex;
+  public final RouteMarkType mPointType;
+  public final int mIntermediateIndex;
   public final boolean mIsVisible;
   public final boolean mIsMyPosition;
   public final boolean mIsPassed;
@@ -43,5 +44,24 @@ public final class RouteMarkData
     mIsPassed = isPassed;
     mLat = lat;
     mLon = lon;
+  }
+
+  @Override
+  public boolean equals(Object other)
+  {
+    if (!(other instanceof RouteMarkData point))
+      return false;
+    if (mPointType != point.mPointType || mIntermediateIndex != point.mIntermediateIndex
+        || mIsVisible != point.mIsVisible || mIsMyPosition != point.mIsMyPosition || mIsPassed != point.mIsPassed
+        || Double.compare(mLat, point.mLat) != 0 || Double.compare(mLon, point.mLon) != 0)
+      return false;
+    return Objects.equals(mTitle, point.mTitle) && Objects.equals(mSubtitle, point.mSubtitle);
+  }
+
+  @Override
+  public int hashCode()
+  {
+    return Objects.hash(mTitle, mSubtitle, mPointType, mIntermediateIndex, mIsVisible, mIsMyPosition, mIsPassed, mLat,
+                        mLon);
   }
 }

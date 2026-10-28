@@ -12,6 +12,8 @@ import app.organicmaps.sdk.bookmarks.data.MapObject;
 import app.organicmaps.sdk.location.LocationHelper;
 import app.organicmaps.sdk.util.concurrency.UiThread;
 import app.organicmaps.sdk.util.log.Logger;
+import java.util.Arrays;
+import java.util.List;
 import org.chromium.base.ObserverList;
 
 @androidx.annotation.UiThread
@@ -54,7 +56,7 @@ public class RoutingController
 
   public interface Container
   {
-    default void showRoutePlan(boolean show, @Nullable Runnable completionListener) {}
+    default void showRoutePlan(boolean show) {}
     default void showNavigation(boolean show) {}
     default void updateMenu() {}
     default void onNavigationCancelled() {}
@@ -257,19 +259,10 @@ public class RoutingController
 
   private void showRoutePlan()
   {
-    showRoutePlan(null, null);
-  }
-
-  private void showRoutePlan(final @Nullable MapObject startPoint, final @Nullable MapObject endPoint)
-  {
     if (mContainer != null)
     {
-      mContainer.showRoutePlan(true, () -> {
-        if (startPoint == null || endPoint == null)
-          updatePlan();
-        else
-          build();
-      });
+      mContainer.showRoutePlan(true);
+      updatePlan();
     }
   }
 
@@ -317,7 +310,7 @@ public class RoutingController
     mHasContainerSavedState = true;
   }
 
-  private void build()
+  void build()
   {
     Framework.nativeRemoveRoute();
 
@@ -415,7 +408,7 @@ public class RoutingController
     mContainsCachedResult = false;
     setState(State.PREPARE);
     setBuildState(BuildState.NONE);
-    startPlanning(getStartPoint(), getEndPoint());
+    startPlanning();
   }
 
   public void prepare(@Nullable MapObject startPoint, @Nullable MapObject endPoint)
@@ -442,7 +435,7 @@ public class RoutingController
     if (startPoint != null || endPoint != null)
       setPointsInternal(startPoint, endPoint);
 
-    startPlanning(startPoint, endPoint);
+    startPlanning();
   }
 
   public void start()
@@ -548,15 +541,16 @@ public class RoutingController
     resetPoiPickState();
   }
 
-  public void launchPlanning()
+  /** Commits a drag only while its immutable snapshot still describes the native itinerary. */
+  public boolean moveRoutePoint(@NonNull List<RouteMarkData> expectedPoints, int from, int to)
   {
+    if (!isPlanning() || from == to || from < 0 || to < 0 || from >= expectedPoints.size()
+        || to >= expectedPoints.size() || !expectedPoints.equals(Arrays.asList(getRoutePoints())))
+      return false;
+
+    Framework.nativeMoveRoutePoint(from, to);
     build();
-    setState(State.PREPARE);
-    startPlanning();
-    if (mContainer != null)
-      mContainer.updateMenu();
-    if (mContainer != null)
-      mContainer.onResetToPlanningState();
+    return true;
   }
 
   /**
@@ -578,7 +572,7 @@ public class RoutingController
   {
     setState(State.PREPARE);
     cancelNavigation(false);
-    startPlanning();
+    showRoutePlan();
     if (mContainer != null)
       mContainer.updateMenu();
     if (mContainer != null)
@@ -670,26 +664,19 @@ public class RoutingController
 
   private void startPlanning()
   {
+    showRoutePlan();
+    // Calculation belongs to the controller, including when restoration finishes without an attached view.
+    if (getStartPoint() != null && getEndPoint() != null)
+      build();
     if (mContainer != null)
-    {
-      showRoutePlan();
-    }
-  }
-
-  private void startPlanning(final @Nullable MapObject startPoint, final @Nullable MapObject endPoint)
-  {
-    if (mContainer != null)
-    {
-      showRoutePlan(startPoint, endPoint);
       mContainer.onPlanningStarted();
-    }
   }
 
   private void cancelPlanning(boolean fireEvent)
   {
     if (mContainer != null)
     {
-      mContainer.showRoutePlan(false, null);
+      mContainer.showRoutePlan(false);
       if (fireEvent)
         mContainer.onPlanningCancelled();
     }
@@ -875,10 +862,16 @@ public class RoutingController
     return getStartOrEndPointByType(RouteMarkType.Finish);
   }
 
+  @NonNull
+  public RouteMarkData[] getRoutePoints()
+  {
+    return Framework.nativeGetRoutePoints();
+  }
+
   @Nullable
   private MapObject getStartOrEndPointByType(@NonNull RouteMarkType type)
   {
-    RouteMarkData[] points = Framework.nativeGetRoutePoints();
+    RouteMarkData[] points = getRoutePoints();
     int size = points.length;
 
     if (size == 0)

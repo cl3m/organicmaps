@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doNothing;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -62,6 +64,7 @@ public class ManageRouteControllerTest
     final RecyclerView recycler = mock(RecyclerView.class);
     final List<Runnable> posted = new ArrayList<>();
     final ItemTouchHelper.Callback drag;
+    final List<RouteMarkData> startOrder;
 
     DragFixture() throws ReflectiveOperationException
     {
@@ -71,10 +74,11 @@ public class ManageRouteControllerTest
       field.setAccessible(true);
       adapter = spy((ManageRouteAdapter) field.get(controller));
       field.set(controller, adapter);
+      startOrder = adapter.getRoutePoints();
       doNothing().when(adapter).notifyItemMoved(anyInt(), anyInt());
       doNothing().when(adapter).notifyDataSetChanged();
-      doNothing().when(controller).onRouteOrderChanged(any());
       doNothing().when(controller).refresh();
+      when(routing.moveRoutePoint(any(), anyInt(), anyInt())).thenReturn(true);
       final Class<?> callback =
           Class.forName(ManageRouteController.class.getName() + "$ManageRouteItemTouchHelperCallback");
       final Constructor<?> constructor =
@@ -120,9 +124,9 @@ public class ManageRouteControllerTest
       fixture.controller.onRoutePointDeleted(fixture.pointHolder(0));
       verify(fixture.routing, never()).removeStop(any(), anyInt());
       fixture.posted.get(0).run();
-      verify(fixture.controller).onRouteOrderChanged(fixture.adapter.getRoutePoints());
-      fixture.controller.onRoutePointDeleted(fixture.pointHolder(0));
-      verify(fixture.routing).removeStop(RouteMarkType.Start, 0);
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 0, 1);
+      fixture.controller.onRoutePointDeleted(fixture.pointHolder(2));
+      verify(fixture.routing).removeStop(RouteMarkType.Finish, 0);
     }
   }
 
@@ -149,7 +153,7 @@ public class ManageRouteControllerTest
         when(fixture.recycler.isAttachedToWindow()).thenReturn(attached);
         when(fixture.routing.isPlanning()).thenReturn(!attached);
         fixture.posted.get(0).run();
-        verify(fixture.controller, never()).onRouteOrderChanged(any());
+        verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
         verify(fixture.controller, never()).refresh();
       }
     }
@@ -166,12 +170,12 @@ public class ManageRouteControllerTest
       fixture.drag.clearView(fixture.recycler, source);
       fixture.drag.onSelectedChanged(source, ItemTouchHelper.ACTION_STATE_DRAG);
       fixture.posted.get(0).run();
-      verify(fixture.controller, never()).onRouteOrderChanged(any());
+      verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
       fixture.controller.onRoutePointDeleted(fixture.pointHolder(0));
       verify(fixture.routing, never()).removeStop(any(), anyInt());
       fixture.drag.clearView(fixture.recycler, source);
       fixture.posted.get(1).run();
-      verify(fixture.controller).onRouteOrderChanged(fixture.adapter.getRoutePoints());
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 0, 1);
     }
   }
 
@@ -186,8 +190,63 @@ public class ManageRouteControllerTest
       fixture.drag.onSelectedChanged(source, ItemTouchHelper.ACTION_STATE_DRAG);
       fixture.drag.clearView(fixture.recycler, source);
       fixture.posted.get(0).run();
-      verify(fixture.controller, never()).onRouteOrderChanged(any());
+      verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
       verify(fixture.controller).refresh();
+    }
+  }
+
+  @Test
+  public void crossingSeveralRowsCommitsOneMoveFromTheOriginalIndex() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      final RecyclerView.ViewHolder source = fixture.move();
+      fixture.drag.onMove(fixture.recycler, source, fixture.pointHolder(2));
+      doReturn(2).when(source).getBindingAdapterPosition();
+      fixture.drag.clearView(fixture.recycler, source);
+      fixture.posted.get(0).run();
+      verify(fixture.routing, times(1)).moveRoutePoint(fixture.startOrder, 0, 2);
+      assertEquals(RouteMarkType.Start, fixture.startOrder.get(0).mPointType);
+      assertEquals(RouteMarkType.Intermediate, fixture.startOrder.get(1).mPointType);
+    }
+  }
+
+  @Test
+  public void regrabbingAndReturningToTheOriginalPositionDoesNotBuild() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      final RecyclerView.ViewHolder source = fixture.move();
+      fixture.drag.clearView(fixture.recycler, source);
+      fixture.drag.onSelectedChanged(source, ItemTouchHelper.ACTION_STATE_DRAG);
+      fixture.drag.onMove(fixture.recycler, source, fixture.pointHolder(0));
+      fixture.drag.clearView(fixture.recycler, source);
+      fixture.posted.get(0).run();
+      fixture.posted.get(1).run();
+      verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
+      verify(fixture.controller).refresh();
+    }
+  }
+
+  @Test
+  public void rejectedDropRefreshesTheNewerNativeItinerary() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    final RouteMarkData[] latest = {point(RouteMarkType.Start, 10), point(RouteMarkType.Finish, 20)};
+    when(fixture.routing.moveRoutePoint(eq(fixture.startOrder), anyInt(), anyInt())).thenReturn(false);
+    when(fixture.routing.getRoutePoints()).thenReturn(latest);
+    doCallRealMethod().when(fixture.controller).refresh();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      fixture.drag.clearView(fixture.recycler, fixture.move());
+      fixture.posted.get(0).run();
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 0, 1);
+      assertEquals(List.of(latest), fixture.adapter.getRoutePoints());
     }
   }
 

@@ -1061,9 +1061,15 @@ bool RoutingManager::CouldAddIntermediatePoint() const
   return m_bmManager->GetUserMarkIds(UserMark::Type::ROUTING).size() < RoutePointsLayout::kMaxRoutePointsCount;
 }
 
-bool RoutingManager::AddRoutePoint(RouteMarkData && markData, bool optimize)
+void RoutingManager::OnRoutePointsEdited()
 {
   ++m_routePointsRevision;
+  CancelRecommendation(Recommendation::RebuildAfterPointsLoading);
+}
+
+bool RoutingManager::AddRoutePoint(RouteMarkData && markData, bool optimize)
+{
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   bool const isIntermediate = markData.m_pointType == RouteMarkType::Intermediate;
@@ -1095,7 +1101,7 @@ bool RoutingManager::AddRoutePoint(RouteMarkData && markData, bool optimize)
 
 void RoutingManager::ReplaceRoutePoint(RouteMarkType type, size_t intermediateIndex, RouteMarkData && markData)
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   auto * target = routePoints.GetRoutePointForEdit(type, intermediateIndex);
@@ -1131,7 +1137,10 @@ bool RoutingManager::OptimizeRoutePoints()
   RoutePointsLayout layout(*m_bmManager);
   if (layout.GetRoutePoint(RouteMarkType::Start) == nullptr || layout.GetRoutePoint(RouteMarkType::Finish) == nullptr)
     return false;
-  return ReorderIntermediatePoints(layout, nullptr /* added */);
+  if (!ReorderIntermediatePoints(layout, nullptr /* added */))
+    return false;
+  OnRoutePointsEdited();
+  return true;
 }
 
 void RoutingManager::ReplaceRoutePoints(std::vector<RouteMarkData> points)
@@ -1166,7 +1175,7 @@ void RoutingManager::ReplaceRoutePoints(std::vector<RouteMarkData> points)
 
 bool RoutingManager::ContinueRouteToPoint(RouteMarkData && markData)
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   ASSERT(markData.m_pointType == RouteMarkType::Finish, ("New route point should have type RouteMarkType::Finish"));
   RoutePointsLayout routePoints(*m_bmManager);
@@ -1202,7 +1211,7 @@ bool RoutingManager::ContinueRouteToPoint(RouteMarkData && markData)
 
 void RoutingManager::RemoveRoutePoint(RouteMarkType type, size_t intermediateIndex)
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   routePoints.RemoveRoutePoint(type, intermediateIndex);
@@ -1210,7 +1219,7 @@ void RoutingManager::RemoveRoutePoint(RouteMarkType type, size_t intermediateInd
 
 void RoutingManager::RemoveRoutePoints()
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   routePoints.RemoveRoutePoints();
@@ -1218,7 +1227,7 @@ void RoutingManager::RemoveRoutePoints()
 
 void RoutingManager::RemoveIntermediateRoutePoints()
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   routePoints.RemoveIntermediateRoutePoints();
@@ -1246,7 +1255,7 @@ void RoutingManager::RemovePassedRoutePoints()
 void RoutingManager::MoveRoutePoint(RouteMarkType currentType, size_t currentIntermediateIndex,
                                     RouteMarkType targetType, size_t targetIntermediateIndex)
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   routePoints.MoveRoutePoint(currentType, currentIntermediateIndex, targetType, targetIntermediateIndex);
@@ -1254,7 +1263,7 @@ void RoutingManager::MoveRoutePoint(RouteMarkType currentType, size_t currentInt
 
 void RoutingManager::MoveRoutePoint(size_t currentIndex, size_t targetIndex)
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
 
   RoutePointsLayout routePoints(*m_bmManager);
@@ -1300,7 +1309,7 @@ void RoutingManager::MoveRoutePoint(size_t currentIndex, size_t targetIndex)
 
 bool RoutingManager::ReverseRoutePoints()
 {
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   ASSERT(m_bmManager != nullptr, ());
   RoutePointsLayout routePoints(*m_bmManager);
   auto const points = routePoints.GetRoutePoints();
@@ -1724,7 +1733,7 @@ void RoutingManager::CancelRoutePointsTransaction(uint32_t transactionId)
     else
       ++it;
 
-  ++m_routePointsRevision;
+  OnRoutePointsEdited();
   // Revert route points.
   ASSERT(m_bmManager != nullptr, ());
   auto editSession = m_bmManager->GetEditSession();

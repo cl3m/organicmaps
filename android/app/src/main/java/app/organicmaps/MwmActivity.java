@@ -1333,20 +1333,12 @@ public class MwmActivity extends BaseMwmFragmentActivity
   }
 
   @Override
-  public void showRoutePlan(boolean show, @Nullable Runnable completionListener)
+  public void showRoutePlan(boolean show)
   {
-    if (show)
+    setRoutingBottomSheetActive(show);
+    if (!show)
     {
-      setRoutingBottomSheetActive(true);
-      if (completionListener != null)
-        completionListener.run();
-    }
-    else
-    {
-      setRoutingBottomSheetActive(false);
       mRoutingPlanViewModel.setShowRoutingBottomSheet(false);
-      if (completionListener != null)
-        completionListener.run();
     }
   }
 
