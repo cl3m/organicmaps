@@ -895,6 +895,77 @@ UNIT_TEST(RoutingManager_OptimizeRoutePointsPreservesPassedStops)
   TEST(passedPoint->IsPassed(), ());
   TEST(!passedPoint->IsVisible(), ());
 }
+UNIT_TEST(RoutingManager_TrafficRebuildRespectsRouter)
+{
+  // Ruler geometry with IRouter's default traffic behavior is the sensitive control.
+  class TrafficSensitiveControl final : public routing::IRouter
+  {
+  public:
+    std::string GetName() const override { return "traffic-sensitive-control"; }
+    void ClearState() override {}
+    void SetGuides(routing::GuidesTracks &&) override {}
+    bool FindClosestProjectionToRoad(m2::PointD const &, m2::PointD const &, double, routing::EdgeProj &) override
+    {
+      return false;
+    }
+    routing::RouterResultCode CalculateRoute(routing::Checkpoints const & checkpoints, m2::PointD const & direction,
+                                             bool adjust, bool alternatives, routing::RouterDelegate const & delegate,
+                                             routing::RoutesResult & result) override
+    {
+      return static_cast<routing::IRouter &>(m_ruler).CalculateRoute(checkpoints, direction, adjust, alternatives,
+                                                                     delegate, result);
+    }
+
+  private:
+    routing::RulerRouter m_ruler;
+  };
+
+  WithSavedRoute([](RoutingManager & manager, BookmarkManager &, TestGuiThread & guiThread)
+  {
+    auto const originalRouter = manager.GetLastUsedRouter();
+    SCOPE_GUARD(restoreRouter, [&] { manager.SetLastUsedRouter(originalRouter); });
+    manager.SetRouter(routing::RouterType::Ruler);
+    manager.Init(std::make_shared<routing::NumMwmIds>());
+    manager.AddRoutePoint(MakeRoutePoint(RouteMarkType::Start, 0, 1.0), false /* optimize */);
+    manager.AddRoutePoint(MakeRoutePoint(RouteMarkType::Finish, 0, 2.0), false /* optimize */);
+    auto & session = manager.RoutingSession();
+
+    for (bool const sensitive : {false, true, false})
+    {
+      if (sensitive)
+        session.SetRouter(std::make_unique<TrafficSensitiveControl>(), nullptr);
+      else
+        session.SetRouter(std::make_unique<routing::RulerRouter>(), nullptr);
+      bool built = false;
+      manager.SetRouteBuildingListener([&](routing::RouterResultCode code, storage::CountriesSet const &)
+      {
+        TEST_EQUAL(code, routing::RouterResultCode::NoError, ());
+        built = true;
+      });
+      manager.BuildRoute();
+      while (!built)
+        guiThread.RunNext();
+      TEST(manager.IsRouteValid(), ());
+
+      auto const * route = session.GetRoute();
+      built = false;
+      session.OnTrafficInfoClear();
+      if (sensitive)
+      {
+        TEST(session.IsRebuildingOnly(), ());
+        while (!built)
+          guiThread.RunNext();
+      }
+      else
+      {
+        TEST(!session.IsBuilding(), ());
+        TEST(session.GetRoute() == route, ());
+        TEST(!built, ());
+      }
+    }
+  });
+}
+
 UNIT_TEST(RoutingManager_RebuildClearsUnavailableAlternatives)
 {
   Platform::ThreadRunner const threadRunner;
