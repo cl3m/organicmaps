@@ -310,6 +310,7 @@ public class RoutingController
     mHasContainerSavedState = true;
   }
 
+  // Package-private so controller tests can observe build requests without loading JNI.
   void build()
   {
     Framework.nativeRemoveRoute();
@@ -548,6 +549,7 @@ public class RoutingController
         || to >= expectedPoints.size() || !expectedPoints.equals(Arrays.asList(getRoutePoints())))
       return false;
 
+    // Planning is already active; build() updates its menu and progress without a navigation reset.
     Framework.nativeMoveRoutePoint(from, to);
     build();
     return true;

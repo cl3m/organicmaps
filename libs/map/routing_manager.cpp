@@ -1350,6 +1350,7 @@ bool RoutingManager::ReorderIntermediatePoints(RoutePointsLayout & layout, Route
 
   auto const & myPosition = m_bmManager->MyPositionMark();
   // An unresolved my-position mark can contain a placeholder pivot, not a usable routing origin.
+  // Keep the current order, including any newly appended stop, until a fix is available.
   if (!myPosition.HasPosition() &&
       std::any_of(points.begin(), points.end(), [](auto const * point) { return point->IsMyPosition(); }))
     return false;
@@ -1805,6 +1806,7 @@ void RoutingManager::LoadRoutePoints(LoadRouteHandler const & handler)
 
 void RoutingManager::SaveRoutePoints()
 {
+  // GetRoutePointsToSave excludes itineraries with fewer than two remaining points.
   auto points = GetRoutePointsToSave();
   if (points.empty())
   {

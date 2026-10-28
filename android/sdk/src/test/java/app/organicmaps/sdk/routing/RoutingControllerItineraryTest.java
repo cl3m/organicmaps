@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import app.organicmaps.sdk.Router;
 import app.organicmaps.sdk.bookmarks.data.MapObject;
@@ -192,5 +193,22 @@ public class RoutingControllerItineraryTest
       assertFalse(controller.moveRoutePoint(expected, 0, expected.size()));
     }
     assertEquals(1, controller.builds);
+  }
+
+  @Test
+  public void queuedDragCannotResetNavigationToPlanning() throws ReflectiveOperationException
+  {
+    final Controller controller = new Controller();
+    final List<RouteMarkData> expected = List.of(controller.getRoutePoints());
+    final Field state = field("mState");
+    final Field navigation = state.getType().getDeclaredField("NAVIGATION");
+    navigation.setAccessible(true);
+    state.set(controller, navigation.get(null));
+    final RoutingController.Container container = mock(RoutingController.Container.class);
+    controller.attach(container);
+    assertFalse(controller.moveRoutePoint(expected, 0, 2));
+    assertTrue(controller.isNavigating());
+    assertEquals(0, controller.builds);
+    verifyNoInteractions(container);
   }
 }

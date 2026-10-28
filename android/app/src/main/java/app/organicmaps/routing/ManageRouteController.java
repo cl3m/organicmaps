@@ -15,6 +15,7 @@ import app.organicmaps.R;
 import app.organicmaps.sdk.routing.RouteMarkData;
 import app.organicmaps.sdk.routing.RouteMarkType;
 import app.organicmaps.sdk.routing.RoutingController;
+import java.util.ArrayList;
 import java.util.List;
 
 public class ManageRouteController implements ManageRouteAdapter.ManageRouteListener
@@ -128,13 +129,38 @@ public class ManageRouteController implements ManageRouteAdapter.ManageRouteList
     mCallback.onOpenRouteSearch();
   }
 
+  private static boolean commitMove(List<RouteMarkData> before, List<RouteMarkData> after)
+  {
+    if (before.size() != after.size())
+      return false;
+    int first = 0;
+    while (first < before.size() && before.get(first).equals(after.get(first)))
+      ++first;
+    if (first == before.size())
+      return false;
+    int last = before.size() - 1;
+    while (before.get(last).equals(after.get(last)))
+      --last;
+
+    // A single move takes either end of the changed range to the other end.
+    // Re-grabbing another row can instead leave an order that needs several moves.
+    final List<RouteMarkData> moved = new ArrayList<>(before);
+    moved.add(last, moved.remove(first));
+    if (moved.equals(after))
+      return RoutingController.get().moveRoutePoint(before, first, last);
+    moved.clear();
+    moved.addAll(before);
+    moved.add(first, moved.remove(last));
+    return moved.equals(after) && RoutingController.get().moveRoutePoint(before, last, first);
+  }
+
   private static class ManageRouteItemTouchHelperCallback extends ItemTouchHelper.Callback
   {
     private final ManageRouteAdapter mManageRouteAdapter;
     private final ManageRouteController mController;
     private int mDragGeneration;
-    private int mDragFrom;
-    private int mDragTo;
+    @Nullable
+    private RecyclerView.ViewHolder mDraggedHolder;
 
     public ManageRouteItemTouchHelperCallback(ManageRouteAdapter adapter, ManageRouteController controller)
     {
@@ -168,12 +194,10 @@ public class ManageRouteController implements ManageRouteAdapter.ManageRouteList
       if (viewHolder != null && actionState == ItemTouchHelper.ACTION_STATE_DRAG)
       {
         ++mDragGeneration;
+        mDraggedHolder = viewHolder;
         // Re-grabbing a recovering row continues the staged edit until its latest drop commits.
         if (!mController.isReordering())
-        {
           mController.mDragStartOrder = mManageRouteAdapter.getRoutePoints();
-          mDragFrom = mDragTo = viewHolder.getBindingAdapterPosition();
-        }
         viewHolder.itemView.setTranslationX(-10f);
         viewHolder.itemView.setTranslationZ(6f);
       }
@@ -196,7 +220,6 @@ public class ManageRouteController implements ManageRouteAdapter.ManageRouteList
     public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder,
                           @NonNull RecyclerView.ViewHolder target)
     {
-      mDragTo = target.getBindingAdapterPosition();
       mManageRouteAdapter.moveRoutePoint(viewHolder, target);
       return true;
     }
@@ -212,20 +235,21 @@ public class ManageRouteController implements ManageRouteAdapter.ManageRouteList
       viewHolder.itemView.setTranslationX(0f);
       viewHolder.itemView.setTranslationZ(0f);
       final List<RouteMarkData> startOrder = mController.mDragStartOrder;
-      if (startOrder == null)
+      // An older row can finish recovering while another row is still being dragged.
+      if (startOrder == null || viewHolder != mDraggedHolder)
         return;
       // Both committing and refreshing can notify the adapter; defer them past a layout callback.
-      final int from = mDragFrom;
-      final int to = mDragTo;
+      final List<RouteMarkData> finalOrder = mManageRouteAdapter.getRoutePoints();
       final int generation = mDragGeneration;
       recyclerView.post(() -> {
         if (generation != mDragGeneration || !mController.isReordering())
           return;
         mController.mDragStartOrder = null;
+        mDraggedHolder = null;
         // A detached panel or cancelled routing has nothing to update.
         if (!recyclerView.isAttachedToWindow() || !RoutingController.get().isPlanning())
           return;
-        if (from == to || !RoutingController.get().moveRoutePoint(startOrder, from, to))
+        if (!commitMove(startOrder, finalOrder))
           mController.refresh();
       });
     }

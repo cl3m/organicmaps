@@ -9,6 +9,8 @@
 
 #include "storage/routing_helpers.hpp"
 
+#include "coding/file_writer.hpp"
+
 #include "platform/gui_thread.hpp"
 #include "platform/platform.hpp"
 #include "platform/platform_tests_support/scoped_dir.hpp"
@@ -1115,6 +1117,38 @@ UNIT_CLASS_TEST(RoutingManagerTest, LoadingSavedPointsDoesNotReplaceANewItinerar
   WaitUntil([&] { return done; });
   TEST_EQUAL(m_manager.GetRoutePoints().back().m_title, "new finish", ());
   WaitForFileThread();
+  TEST(!m_manager.HasSavedRoutePoints(), ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, SavingAPartialRouteRemovesThePreviousSavedItinerary)
+{
+  m_manager.ReplaceRoutePoints(
+      {MakePoint(RouteMarkType::Start, 1, "start"), MakePoint(RouteMarkType::Finish, 2, "finish")});
+  SavePoints();
+  TEST(m_manager.HasSavedRoutePoints(), ());
+  m_manager.RemoveRoutePoint(RouteMarkType::Finish);
+  TEST_EQUAL(m_manager.GetRoutePointsCount(), 1, ());
+  SavePoints();
+  TEST(!m_manager.HasSavedRoutePoints(), ());
+}
+
+UNIT_CLASS_TEST(RoutingManagerTest, LoadingASingleSavedPointFailsOnGuiWithoutApplyingIt)
+{
+  {
+    FileWriter writer(GetPlatform().SettingsPathForFile("route_points.dat"));
+    std::string const data = R"([{"type":0,"title":"start","x":1.0,"y":1.0}])";
+    writer.Write(data.data(), data.size());
+  }
+  auto const guiThread = std::this_thread::get_id();
+  bool done = false;
+  m_manager.LoadRoutePoints([&](bool success)
+  {
+    TEST(!success, ());
+    TEST(std::this_thread::get_id() == guiThread, ());
+    done = true;
+  });
+  WaitUntil([&] { return done; });
+  TEST_EQUAL(m_manager.GetRoutePointsCount(), 0, ());
   TEST(!m_manager.HasSavedRoutePoints(), ());
 }
 

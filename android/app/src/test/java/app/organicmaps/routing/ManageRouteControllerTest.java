@@ -68,8 +68,12 @@ public class ManageRouteControllerTest
 
     DragFixture() throws ReflectiveOperationException
     {
-      controller = controller(point(RouteMarkType.Start, 0), point(RouteMarkType.Intermediate, 0),
-                              point(RouteMarkType.Finish, 0));
+      this(point(RouteMarkType.Start, 0), point(RouteMarkType.Intermediate, 0), point(RouteMarkType.Finish, 0));
+    }
+
+    DragFixture(RouteMarkData... points) throws ReflectiveOperationException
+    {
+      controller = controller(points);
       final Field field = ManageRouteController.class.getDeclaredField("mManageRouteAdapter");
       field.setAccessible(true);
       adapter = spy((ManageRouteAdapter) field.get(controller));
@@ -214,6 +218,23 @@ public class ManageRouteControllerTest
   }
 
   @Test
+  public void draggingTheFinishToTheStartCommitsTheBackwardMove() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      final RecyclerView.ViewHolder source = fixture.pointHolder(2);
+      fixture.drag.onSelectedChanged(source, ItemTouchHelper.ACTION_STATE_DRAG);
+      fixture.drag.onMove(fixture.recycler, source, fixture.pointHolder(0));
+      doReturn(0).when(source).getBindingAdapterPosition();
+      fixture.drag.clearView(fixture.recycler, source);
+      fixture.posted.get(0).run();
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 2, 0);
+    }
+  }
+
+  @Test
   public void regrabbingAndReturningToTheOriginalPositionDoesNotBuild() throws ReflectiveOperationException
   {
     final DragFixture fixture = new DragFixture();
@@ -225,6 +246,74 @@ public class ManageRouteControllerTest
       fixture.drag.onSelectedChanged(source, ItemTouchHelper.ACTION_STATE_DRAG);
       fixture.drag.onMove(fixture.recycler, source, fixture.pointHolder(0));
       fixture.drag.clearView(fixture.recycler, source);
+      fixture.posted.get(0).run();
+      fixture.posted.get(1).run();
+      verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
+      verify(fixture.controller).refresh();
+    }
+  }
+
+  @Test
+  public void regrabbingAnotherRowCommitsTheMoveShownByTheFinalOrder() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      // A-B-C -> B-A-C, then grab B and move it to the end: A-C-B.
+      fixture.drag.clearView(fixture.recycler, fixture.move());
+      final RecyclerView.ViewHolder second = fixture.pointHolder(0);
+      fixture.drag.onSelectedChanged(second, ItemTouchHelper.ACTION_STATE_DRAG);
+      fixture.drag.onMove(fixture.recycler, second, fixture.pointHolder(2));
+      doReturn(2).when(second).getBindingAdapterPosition();
+      fixture.drag.clearView(fixture.recycler, second);
+      fixture.posted.get(0).run();
+      verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
+      fixture.posted.get(1).run();
+      assertEquals(List.of(fixture.startOrder.get(0), fixture.startOrder.get(2), fixture.startOrder.get(1)),
+                   fixture.adapter.getRoutePoints());
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 1, 2);
+    }
+  }
+
+  @Test
+  public void olderRowsRecoveryCannotCommitTheNewRowsDrag() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture();
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      final RecyclerView.ViewHolder first = fixture.move();
+      fixture.drag.onSelectedChanged(null, ItemTouchHelper.ACTION_STATE_IDLE);
+      final RecyclerView.ViewHolder second = fixture.pointHolder(0);
+      fixture.drag.onSelectedChanged(second, ItemTouchHelper.ACTION_STATE_DRAG);
+      fixture.drag.clearView(fixture.recycler, first);
+      assertTrue(fixture.posted.isEmpty());
+      fixture.controller.onRoutePointDeleted(fixture.pointHolder(2));
+      verify(fixture.routing, never()).removeStop(any(), anyInt());
+      fixture.drag.onMove(fixture.recycler, second, fixture.pointHolder(2));
+      doReturn(2).when(second).getBindingAdapterPosition();
+      fixture.drag.clearView(fixture.recycler, second);
+      fixture.posted.get(0).run();
+      verify(fixture.routing).moveRoutePoint(fixture.startOrder, 1, 2);
+    }
+  }
+
+  @Test
+  public void regrabbingAnotherRowDiscardsAnOrderThatNeedsMultipleMoves() throws ReflectiveOperationException
+  {
+    final DragFixture fixture = new DragFixture(point(RouteMarkType.Start, 0), point(RouteMarkType.Intermediate, 0),
+                                                point(RouteMarkType.Intermediate, 1), point(RouteMarkType.Finish, 0));
+    try (MockedStatic<RoutingController> singleton = mockStatic(RoutingController.class))
+    {
+      singleton.when(RoutingController::get).thenReturn(fixture.routing);
+      // Two independent swaps cannot be represented by one native move: A-B-C-D -> B-A-D-C.
+      fixture.drag.clearView(fixture.recycler, fixture.move());
+      final RecyclerView.ViewHolder second = fixture.pointHolder(3);
+      fixture.drag.onSelectedChanged(second, ItemTouchHelper.ACTION_STATE_DRAG);
+      fixture.drag.onMove(fixture.recycler, second, fixture.pointHolder(2));
+      doReturn(2).when(second).getBindingAdapterPosition();
+      fixture.drag.clearView(fixture.recycler, second);
       fixture.posted.get(0).run();
       fixture.posted.get(1).run();
       verify(fixture.routing, never()).moveRoutePoint(any(), anyInt(), anyInt());
